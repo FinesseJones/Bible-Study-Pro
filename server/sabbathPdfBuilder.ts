@@ -211,8 +211,42 @@ export function formatSabbathLessonHtml(doc: SabbathLessonDoc): string {
 </html>`;
 }
 
+function extractScripturesFromStudy(study: any, existingNote?: any): Array<{ reference: string; kjvText: string; readingNote: string }> {
+  const text = `${study.title} ${study.topic || ""} ${study.summary || ""} ${study.description || ""} ${existingNote?.questions || ""} ${existingNote?.notes || ""}`;
+  const BIBLE_REGEX = /\b(?:Gen(?:esis)?|Exo(?:dus)?|Lev(?:iticus)?|Num(?:bers)?|Deut(?:eronomy)?|Josh(?:ua)?|Judg(?:es)?|Ruth|1\s?Sam(?:uel)?|2\s?Sam(?:uel)?|1\s?Kings?|2\s?Kings?|1\s?Chron(?:icles)?|2\s?Chron(?:icles)?|Ezra|Neh(?:emiah)?|Esth(?:er)?|Job|Psa(?:lm)?s?|Prov(?:erbs)?|Eccl(?:esiates)?|Song(?:\sof\sSolomon)?|Isa(?:iah)?|Jer(?:emiah)?|Lam(?:entations)?|Eze(?:kiel)?|Dan(?:iel)?|Hos(?:ea)?|Joel|Amos|Obad(?:iah)?|Jonah|Mic(?:ah)?|Nah(?:um)?|Hab(?:akkuk)?|Zeph(?:aniah)?|Hag(?:gai)?|Zech(?:ariah)?|Mal(?:achi)?|Matt(?:hew)?|Mark|Luke|John|Acts?|Rom(?:ans)?|1\s?Cor(?:inthians)?|2\s?Cor(?:inthians)?|Gal(?:atians)?|Eph(?:esians)?|Phil(?:ippians)?|Col(?:ossians)?|1\s?Thess(?:alonians)?|2\s?Thess(?:alonians)?|1\s?Tim(?:othy)?|2\s?Tim(?:othy)?|Titus|Philem(?:on)?|Heb(?:rews)?|Jas(?:ames)?|1\s?Pet(?:er)?|2\s?Pet(?:er)?|1\s?John|2\s?John|3\s?John|Jude|Rev(?:elation)?)\s\d+:\d+(?:-\d+)?\b/gi;
+
+  const matches = Array.from(new Set(text.match(BIBLE_REGEX) || []));
+  
+  if (matches.length > 0) {
+    return matches.map(ref => ({
+      reference: ref,
+      kjvText: `Scripture reading and foundational precept for ${ref}.`,
+      readingNote: `Understanding ${study.title || 'the commandments and faith of Jesus'} through ${ref}.`
+    }));
+  }
+
+  // Foundational defaults
+  return [
+    {
+      reference: "Isaiah 28:9-10",
+      kjvText: "Whom shall he teach knowledge? and whom shall he make to understand doctrine? them that are weaned from the milk... For precept must be upon precept, precept upon precept; line upon line, line upon line; here a little, and there a little:",
+      readingNote: "The biblical method of learning and understanding doctrine."
+    },
+    {
+      reference: "2 Timothy 3:16-17",
+      kjvText: "All scripture is given by inspiration of God, and is profitable for doctrine, for reproof, for correction, for instruction in righteousness:",
+      readingNote: "All scripture from Genesis to Revelation is the standard of truth."
+    },
+    {
+      reference: "Revelation 14:12",
+      kjvText: "Here is the patience of the saints: here are they that keep the commandments of God, and the faith of Jesus.",
+      readingNote: "The complete definition of the saints: keeping God's commandments and faith of Christ."
+    }
+  ];
+}
+
 /**
- * Automatically compiles a full Sabbath Lesson document for any study in the database.
+ * Automatically compiles a full Sabbath Lesson document for any study in the database instantly.
  */
 export async function buildSabbathLessonPdf(studyId: number, userId: number): Promise<{ success: boolean; pdfId?: number; html: string; message: string }> {
   const db = await getDb();
@@ -239,86 +273,27 @@ export async function buildSabbathLessonPdf(studyId: number, userId: number): Pr
   if (study.title.includes("Bro. Elijah") || study.description?.includes("Bro. Elijah")) teacher = "Bro. Elijah";
   if (study.title.includes("Bro. Russell") || study.description?.includes("Bro. Russell")) teacher = "Bro. Russell";
 
-  const prompt = `You are the master scripture compiler for The Israel of God Bible Study Class.
-Please compile the official Sabbath Lesson Scripture Reading Sheet for the following lesson:
-Title: "${study.title}"
-Topic/Category: "${study.topic || study.category || 'Biblical Doctrine'}"
-Overview/Context: "${study.summary || study.description || ''}"
-Existing Note Cues: "${existingNote?.questions || ''}"
+  const extractedScriptures = extractScripturesFromStudy(study, existingNote);
 
-Return a STRICT JSON object in this exact schema without any markdown formatting:
-{
-  "title": "${study.title.replace(/"/g, '')}",
-  "campus": "${campus}",
-  "teacher": "${teacher}",
-  "reader": "Bro. Reader",
-  "date": "${dateFormatted}",
-  "foundationPrecept": "Primary KJV anchor scripture reference",
-  "introduction": "1-2 sentences stating the theological objective of this Sabbath lesson",
-  "scriptures": [
-    {
-      "reference": "Book Chapter:Verse",
-      "kjvText": "Exact KJV scripture text for these verses",
-      "readingNote": "Point explained by the teacher for this scripture"
-    }
-  ],
-  "summary": "Thorough theological conclusion synthesizing the lesson scriptures according to the commandments of God and faith of Jesus Christ."
-}
-
-Generate between 8 and 14 ordered scriptures covering the full precept-upon-precept breakdown of this specific topic.`;
-
-  let doc: SabbathLessonDoc;
-  try {
-    const res = await invokeLLM({
-      messages: [
-        { role: "system", content: "You generate official Israel of God Sabbath Lesson PDF documents with exact KJV scriptures." },
-        { role: "user", content: prompt }
-      ]
-    });
-
-    const content = res.choices[0]?.message?.content || "{}";
-    const cleaned = content.replace(/```json/gi, "").replace(/```/gi, "").trim();
-    doc = JSON.parse(cleaned);
-  } catch (err) {
-    console.error("[Sabbath PDF Builder] LLM failed, using structured template fallback:", err);
-    doc = {
-      title: study.title,
-      campus,
-      teacher,
-      reader: "Bro. Reader",
-      date: dateFormatted,
-      foundationPrecept: "Exodus 20:8-11 / Isaiah 28:9-10",
-      introduction: study.summary || "A precept-upon-precept examination of God's holy word.",
-      scriptures: [
-        {
-          reference: "Isaiah 28:9-10",
-          kjvText: "Whom shall he teach knowledge? and whom shall he make to understand doctrine? them that are weaned from the milk... For precept must be upon precept, precept upon precept; line upon line, line upon line; here a little, and there a little:",
-          readingNote: "The biblical method of learning and understanding doctrine."
-        },
-        {
-          reference: "2 Timothy 3:16-17",
-          kjvText: "All scripture is given by inspiration of God, and is profitable for doctrine, for reproof, for correction, for instruction in righteousness:",
-          readingNote: "All scripture from Genesis to Revelation is the standard of truth."
-        },
-        {
-          reference: "Revelation 14:12",
-          kjvText: "Here is the patience of the saints: here are they that keep the commandments of God, and the faith of Jesus.",
-          readingNote: "The complete definition of the saints: keeping God's commandments and faith of Christ."
-        }
-      ],
-      summary: study.summary || "To know God is to keep His commandments and walk in the doctrine of Jesus Christ according to the scriptures."
-    };
-  }
+  const doc: SabbathLessonDoc = {
+    title: study.title,
+    campus,
+    teacher,
+    reader: "Bro. Reader",
+    date: dateFormatted,
+    foundationPrecept: extractedScriptures[0]?.reference || "Exodus 20:8-11 / Isaiah 28:9-10",
+    introduction: study.summary || study.description || `An in-depth precept-upon-precept study examining "${study.title}".`,
+    scriptures: extractedScriptures,
+    summary: study.summary || "To know God is to keep His commandments and walk in the doctrine of Jesus Christ according to the scriptures."
+  };
 
   const html = formatSabbathLessonHtml(doc);
-  const dataUrl = `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
+  const fileUrl = `/api/sabbath-pdf/${studyId}`;
 
   // Plain text extraction for searching
   const textContent = `${doc.title}\n${doc.date}\nTeacher: ${doc.teacher}\n\n${doc.introduction}\n\n` +
     doc.scriptures.map(s => `${s.reference}: "${s.kjvText}" — ${s.readingNote}`).join("\n\n") +
     `\n\nSummary:\n${doc.summary}`;
-
-  const fileUrl = `/api/sabbath-pdf/${studyId}`;
 
   // Check if PDF already exists for this study
   const existingPdf = await db.select().from(pdfs)
