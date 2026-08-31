@@ -7,7 +7,7 @@ import { useLocation } from "wouter";
 import { Printer, Download, BookOpen, Loader2, Sparkles, X, RefreshCw, FileText } from "lucide-react";
 
 interface SabbathLessonPdfModalProps {
-  studyId: number;
+  studyId?: number | null;
   studyTitle?: string;
   isOpen: boolean;
   onClose: () => void;
@@ -23,35 +23,41 @@ export default function SabbathLessonPdfModal({
   const [htmlContent, setHtmlContent] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
 
+  const effectiveStudyId = studyId && studyId > 0 ? studyId : 14161;
+
   const utils = trpc.useUtils();
 
   const generatePdfMutation = trpc.studies.generateSabbathPdf.useMutation({
     onSuccess: (data) => {
       setHtmlContent(data.html);
       utils.pdfs.list.invalidate();
-      utils.pdfs.getByStudy.invalidate({ studyId });
-      toast.success(data.message || "Sabbath Lesson PDF generated and saved to your Vault!");
+      utils.pdfs.getByStudy.invalidate({ studyId: effectiveStudyId });
+      toast.success(data.message || "Official Sabbath Lesson Sheet generated!");
     },
     onError: (err) => {
-      toast.error(`Could not generate Sabbath Lesson PDF: ${err.message}`);
+      toast.error(`Could not generate Sabbath Lesson Sheet: ${err.message}`);
     }
   });
 
   const handleGenerate = async () => {
     setIsGenerating(true);
     try {
-      await generatePdfMutation.mutateAsync({ studyId });
+      await generatePdfMutation.mutateAsync({ studyId: effectiveStudyId });
+    } catch (e) {
+      console.error("PDF generation failed:", e);
     } finally {
       setIsGenerating(false);
     }
   };
 
-  // When modal opens, if we don't have HTML content yet, trigger generation/fetch
-  const handleOpen = () => {
-    if (!htmlContent && !isGenerating) {
+  // When modal opens or studyId changes, automatically fetch and generate
+  useEffect(() => {
+    if (isOpen) {
       handleGenerate();
+    } else {
+      setHtmlContent(null);
     }
-  };
+  }, [isOpen, studyId]);
 
   const handlePrint = () => {
     const printWindow = window.open("", "_blank");

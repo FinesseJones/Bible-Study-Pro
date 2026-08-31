@@ -739,8 +739,12 @@ export default function CornellNotes({ embedded = false }: { embedded?: boolean 
 
   const getYouTubeId = (url?: string | null) => {
     if (!url) return null;
-    const match = url.match(/[?&]v=([^&]+)/) || url.match(/youtu\.be\/([^?]+)/);
-    return match ? match[1] : null;
+    const cleanUrl = url.trim();
+    if (/^[a-zA-Z0-9_-]{11}$/.test(cleanUrl)) return cleanUrl;
+    const match = cleanUrl.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|live\/|shorts\/))([\w-]{11})/);
+    if (match) return match[1];
+    const fallback = cleanUrl.match(/[?&]v=([^&#]+)/) || cleanUrl.match(/youtu\.be\/([^?&#]+)/);
+    return fallback ? fallback[1] : null;
   };
 
   const selectedStudy = studies.find(s => s.id === studyId) || (externalLesson ? {
@@ -755,6 +759,18 @@ export default function CornellNotes({ embedded = false }: { embedded?: boolean 
   const videoId = getYouTubeId(selectedStudy?.videoUrl);
   const isPdf = selectedStudy?.videoUrl?.toLowerCase().endsWith(".pdf") || selectedStudy?.videoUrl?.includes("theisraelofgod.com") || selectedStudy?.videoUrl?.includes("drive.google.com") || studyPdfs.length > 0;
   const isDriveFolder = selectedStudy?.videoUrl?.includes("/folders/");
+
+  // Automatically select the best tab when study loads
+  useEffect(() => {
+    if (selectedStudy) {
+      const vId = getYouTubeId(selectedStudy.videoUrl);
+      if (vId) {
+        setLeftTab("video");
+      } else if (studyPdfs.length > 0 || isPdf) {
+        setLeftTab("pdf");
+      }
+    }
+  }, [selectedStudy?.id, studyPdfs.length]);
 
   const handleExportPDF = () => { window.print(); };
 
@@ -857,7 +873,7 @@ export default function CornellNotes({ embedded = false }: { embedded?: boolean 
             src={getViewableUrl(studyPdfs[0].fileUrl) || ""}
             width="100%" height="100%" className="w-full h-full bg-white"
           />
-        ) : isPdf ? (
+        ) : isPdf && selectedStudy?.videoUrl ? (
           <iframe
             src={getViewableUrl(selectedStudy?.videoUrl) || ""}
             width="100%" height="100%" className="w-full h-full bg-white"
@@ -868,17 +884,28 @@ export default function CornellNotes({ embedded = false }: { embedded?: boolean 
             width="100%" height="100%" className="w-full h-full bg-white"
           />
         ) : (
-          <div className="flex items-center justify-center h-full text-[#6B7A8D]">
-            <div className="text-center p-8">
-              <BookOpen className="w-12 h-12 mx-auto mb-4 text-[#D4AF37]/50" />
-              <p>No PDF resource for this lesson.</p>
-            </div>
-          </div>
+          <iframe
+            src={`/api/sabbath-pdf/${studyId || 14161}`}
+            width="100%" height="100%" className="w-full h-full bg-white"
+            title="Sabbath Lesson Sheet"
+          />
         )}
       </TabsContent>
 
-      <TabsContent value="logos" className="flex-1 m-0">
-        <iframe src={LOGOS_URL} width="100%" height="100%" className="w-full h-full" style={{ border: "none" }} />
+      <TabsContent value="logos" className="flex-1 m-0 flex flex-col p-6 bg-[#0B132B] items-center justify-center text-center">
+        <div className="max-w-md p-8 rounded-2xl bg-[#1C2541] border border-[#D4AF37]/30 space-y-4 shadow-xl">
+          <BookOpen className="w-12 h-12 text-[#D4AF37] mx-auto animate-pulse" />
+          <h3 className="text-xl font-bold font-serif text-[#F9F6F0]">Logos Bible Study Software</h3>
+          <p className="text-xs text-[#6B7A8D] leading-relaxed">
+            Access your complete Logos 1900 KJV Theological library, Strong's lexicons, and cross-references in a dedicated workspace window.
+          </p>
+          <Button 
+            onClick={() => window.open(LOGOS_URL, "_blank")}
+            className="bg-[#D4AF37] hover:bg-[#D4AF37]/90 text-[#0B132B] font-bold w-full h-11 text-sm shadow-md"
+          >
+            Launch Logos KJV Reader
+          </Button>
+        </div>
       </TabsContent>
 
       <TabsContent value="mic" className="flex-1 m-0 flex flex-col p-6 bg-[#0B132B]">
@@ -1477,14 +1504,12 @@ export default function CornellNotes({ embedded = false }: { embedded?: boolean 
       </AnimatePresence>
 
       {/* Official Sabbath Lesson PDF Builder Modal */}
-      {studyId && (
-        <SabbathLessonPdfModal 
-          studyId={studyId} 
-          studyTitle={selectedStudy?.title} 
-          isOpen={isPdfModalOpen} 
-          onClose={() => setIsPdfModalOpen(false)} 
-        />
-      )}
+      <SabbathLessonPdfModal 
+        studyId={studyId || 14161} 
+        studyTitle={selectedStudy?.title || (studyId === 0 ? "Live Theological Session" : "Sabbath Lesson")} 
+        isOpen={isPdfModalOpen} 
+        onClose={() => setIsPdfModalOpen(false)} 
+      />
 
       <div className="bg-[#1C2541]/90 backdrop-blur-md border-b border-[#D4AF37]/20 p-3">
         <div className="flex flex-row items-center justify-between gap-2">
@@ -1516,33 +1541,38 @@ export default function CornellNotes({ embedded = false }: { embedded?: boolean 
 
           {/* Desktop Controls */}
           {!isMobile ? (
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
               <ImportLessonDialog 
                 onSuccess={(newId) => {
                   setStudyId(newId);
                 }}
+                trigger={
+                  <Button size="sm" variant="outline" className="border-[#D4AF37]/40 text-[#D4AF37] hover:bg-[#D4AF37]/10 font-bold text-xs gap-1 h-8">
+                    <PlusCircle className="w-3.5 h-3.5" /> Import
+                  </Button>
+                }
               />
 
               <Button
                 size="sm"
                 onClick={() => setIsPdfModalOpen(true)}
                 title="Build Official Sabbath Lesson PDF Sheet"
-                className="bg-[#D4AF37]/15 border border-[#D4AF37]/50 text-[#D4AF37] hover:bg-[#D4AF37]/30 font-bold"
+                className="bg-[#D4AF37] text-[#0B132B] hover:bg-[#D4AF37]/90 font-bold text-xs gap-1.5 h-8 shadow-sm"
               >
-                <Printer className="w-4 h-4 mr-1.5" /> Sabbath PDF
+                <Printer className="w-3.5 h-3.5" /> Sabbath PDF
               </Button>
 
               <Button 
                 size="sm" 
                 onClick={() => setIsLiveMode(!isLiveMode)} 
                 className={cn(
-                  "font-bold transition-all border",
+                  "font-bold text-xs gap-1 h-8 transition-all border",
                   isLiveMode 
                     ? "bg-[#D4AF37]/20 border-[#D4AF37] text-[#D4AF37]" 
-                    : "bg-[#1C2541] border-[#D4AF37]/30 text-[#D4AF37]/50"
+                    : "bg-[#1C2541] border-[#D4AF37]/30 text-[#D4AF37]/70 hover:text-[#D4AF37]"
                 )}
               >
-                <Monitor className="w-4 h-4 mr-2" />
+                <Monitor className="w-3.5 h-3.5" />
                 {isLiveMode ? "Live Mode" : "Visual Mode"}
               </Button>
 
@@ -1550,35 +1580,48 @@ export default function CornellNotes({ embedded = false }: { embedded?: boolean 
                 size="sm" 
                 onClick={toggleRecording} 
                 className={cn(
-                  "font-bold transition-all",
+                  "font-bold text-xs gap-1 h-8 transition-all",
                   isRecording 
                     ? "bg-red-600 hover:bg-red-700 animate-pulse text-white" 
-                    : "bg-[#1C2541] border border-[#D4AF37]/30 text-[#D4AF37]"
+                    : "bg-[#1C2541] border border-[#D4AF37]/30 text-[#D4AF37] hover:bg-[#D4AF37]/10"
                 )}
               >
                 {isRecording ? (
-                  <><Square className="w-4 h-4 mr-2" /> {formatTime(recordingTime)}</>
+                  <><Square className="w-3.5 h-3.5" /> {formatTime(recordingTime)}</>
                 ) : (
-                  <><Mic className="w-4 h-4 mr-2" /> Go Live</>
+                  <><Mic className="w-3.5 h-3.5" /> Go Live</>
                 )}
               </Button>
 
-              <Button size="sm" onClick={handleAutoGenerate} disabled={isGenerating} className="bg-[#D4AF37] text-[#0B132B] font-bold">
-                {isGenerating ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Wand2 className="w-4 h-4 mr-2" />}
+              <Button 
+                size="sm" 
+                onClick={handleAutoGenerate} 
+                disabled={isGenerating} 
+                className="bg-[#D4AF37]/20 border border-[#D4AF37] text-[#D4AF37] hover:bg-[#D4AF37]/30 font-bold text-xs gap-1 h-8"
+              >
+                {isGenerating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wand2 className="w-3.5 h-3.5" />}
                 AI Sync
               </Button>
-              <Button size="sm" onClick={handleSave} className="bg-[#1C2541] border border-[#D4AF37]/30 text-[#D4AF37]">
-                {isSaving ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Save className="w-4 h-4 mr-2" />} Save
+
+              <Button 
+                size="sm" 
+                onClick={handleSave} 
+                disabled={isSaving}
+                className="bg-[#1C2541] border border-[#D4AF37]/30 text-[#D4AF37] hover:bg-[#D4AF37]/10 font-bold text-xs gap-1 h-8"
+              >
+                {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />} Save
               </Button>
+
               <Button
                 size="sm"
                 onClick={handleExportPDF}
                 title="Export notes as PDF"
-                className="bg-[#1C2541] border border-[#D4AF37]/30 text-[#D4AF37] hover:bg-[#D4AF37]/10"
+                className="bg-[#1C2541] border border-[#D4AF37]/30 text-[#D4AF37] hover:bg-[#D4AF37]/10 font-bold text-xs gap-1 h-8"
               >
-                <FileDown className="w-4 h-4 mr-1" /> Export
+                <FileDown className="w-3.5 h-3.5" /> Export
               </Button>
-              <Button size="sm" variant="ghost" onClick={() => setStudyId(null)} className="text-[#6B7A8D]">
+
+              <Button size="sm" variant="ghost" onClick={() => setLocation("/")} className="text-[#6B7A8D] hover:text-[#D4AF37] h-8 w-8 p-0">
                 <X className="w-4 h-4" />
               </Button>
             </div>
