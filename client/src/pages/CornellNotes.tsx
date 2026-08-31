@@ -868,25 +868,22 @@ export default function CornellNotes({ embedded = false }: { embedded?: boolean 
       </TabsContent>
 
       <TabsContent value="pdf" className="flex-1 m-0 flex flex-col">
-        {studyPdfs.length > 0 ? (
+        {studyPdfs.length > 0 && studyPdfs[0]?.fileUrl ? (
           <iframe
             src={getViewableUrl(studyPdfs[0].fileUrl) || ""}
-            width="100%" height="100%" className="w-full h-full bg-white"
+            width="100%" height="100%" className="w-full h-full bg-white border-0"
+            title="Study Document"
           />
-        ) : isPdf && selectedStudy?.videoUrl ? (
+        ) : selectedStudy?.videoUrl && (selectedStudy.videoUrl.toLowerCase().endsWith(".pdf") || selectedStudy.videoUrl.includes("drive.google.com")) ? (
           <iframe
-            src={getViewableUrl(selectedStudy?.videoUrl) || ""}
-            width="100%" height="100%" className="w-full h-full bg-white"
-          />
-        ) : isDriveFolder ? (
-          <iframe 
-            src={`https://drive.google.com/embeddedfolderview?id=${selectedStudy?.videoUrl?.split('/folders/')[1]?.split('?')[0]}#grid`} 
-            width="100%" height="100%" className="w-full h-full bg-white"
+            src={getViewableUrl(selectedStudy.videoUrl) || ""}
+            width="100%" height="100%" className="w-full h-full bg-white border-0"
+            title="Study Document"
           />
         ) : (
           <iframe
             src={`/api/sabbath-pdf/${studyId || 14161}`}
-            width="100%" height="100%" className="w-full h-full bg-white"
+            width="100%" height="100%" className="w-full h-full bg-white border-0"
             title="Sabbath Lesson Sheet"
           />
         )}
@@ -1504,12 +1501,14 @@ export default function CornellNotes({ embedded = false }: { embedded?: boolean 
       </AnimatePresence>
 
       {/* Official Sabbath Lesson PDF Builder Modal */}
-      <SabbathLessonPdfModal 
-        studyId={studyId || 14161} 
-        studyTitle={selectedStudy?.title || (studyId === 0 ? "Live Theological Session" : "Sabbath Lesson")} 
-        isOpen={isPdfModalOpen} 
-        onClose={() => setIsPdfModalOpen(false)} 
-      />
+      {isPdfModalOpen && (
+        <SabbathLessonPdfModal 
+          studyId={studyId || 14161} 
+          studyTitle={selectedStudy?.title || (studyId === 0 ? "Live Theological Session" : "Sabbath Lesson")} 
+          isOpen={isPdfModalOpen} 
+          onClose={() => setIsPdfModalOpen(false)} 
+        />
+      )}
 
       <div className="bg-[#1C2541]/90 backdrop-blur-md border-b border-[#D4AF37]/20 p-3">
         <div className="flex flex-row items-center justify-between gap-2">
@@ -1745,6 +1744,17 @@ export default function CornellNotes({ embedded = false }: { embedded?: boolean 
                 <Wand2 className="w-5 h-5 mr-3 shrink-0" />
               )}
               AI Sync & Insights
+            </Button>
+
+            <Button
+              onClick={() => {
+                setIsPdfModalOpen(true);
+                setIsMobileMenuOpen(false);
+              }}
+              className="w-full h-12 justify-start font-bold text-sm px-4 rounded-xl bg-[#0B132B] border border-[#D4AF37]/40 text-[#D4AF37] hover:bg-[#D4AF37]/10 touch-target"
+            >
+              <Printer className="w-5 h-5 mr-3 shrink-0" />
+              Sabbath Lesson (8-Page PDF)
             </Button>
 
             <Button

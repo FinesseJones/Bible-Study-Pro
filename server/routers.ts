@@ -231,10 +231,11 @@ export const appRouter = router({
           ));
       }),
 
-    generateSabbathPdf: protectedProcedure
+    generateSabbathPdf: publicProcedure
       .input(z.object({ studyId: z.number() }))
       .mutation(async ({ ctx, input }) => {
-        return buildSabbathLessonPdf(input.studyId, ctx.user.id);
+        const userId = ctx.user?.id || 1;
+        return buildSabbathLessonPdf(input.studyId, userId);
       }),
   }),
 
