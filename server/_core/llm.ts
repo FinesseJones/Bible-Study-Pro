@@ -236,12 +236,10 @@ export async function detectActiveLocalUrl(): Promise<string> {
     "http://localhost:1234/v1/chat/completions",  // LM Studio
   ].filter((url): url is string => !!url);
 
-  console.log("[AI Auto-Detect] Probing candidate local LLM endpoints:", candidateUrls);
-
   for (const url of candidateUrls) {
     try {
       const controller = new AbortController();
-      const id = setTimeout(() => controller.abort(), 120); // Quick 120ms timeout
+      const id = setTimeout(() => controller.abort(), 120); // 120ms probe
       
       const baseUrl = url.endsWith("/chat/completions") ? url.replace("/chat/completions", "/models") : url;
       const response = await fetch(baseUrl, { 
@@ -260,9 +258,12 @@ export async function detectActiveLocalUrl(): Promise<string> {
     }
   }
 
-  // Fallback if none detected
-  const fallback = ENV.localLlmUrl || "http://localhost:8080/v1/chat/completions";
-  console.log(`[AI Auto-Detect] No online local LLM detected. Defaulting to: ${fallback}`);
+  // Fallback if no local LLM is detected: route to OpenRouter cloud directly
+  const fallback = (ENV.openRouterApiKey && ENV.openRouterApiKey.length > 10)
+    ? "https://openrouter.ai/api/v1/chat/completions"
+    : (ENV.localLlmUrl || "http://localhost:11434/v1/chat/completions");
+  
+  console.log(`[AI Auto-Detect] No active local LLM detected. Routing to: ${fallback}`);
   return fallback;
 }
 
@@ -309,7 +310,7 @@ const resolveStreamApiUrl = async (agentOverride?: string) => {
 
 const assertApiKey = async (agentOverride?: string) => {
   const targetUrl = await resolveApiUrl(agentOverride);
-  if (targetUrl.includes("openrouter.ai") && !process.env.OPENROUTER_API_KEY) {
+  if (targetUrl.includes("openrouter.ai") && !process.env.OPENROUTER_API_KEY && !ENV.openRouterApiKey) {
     throw new Error("OPENROUTER_API_KEY is not set in environment variables");
   }
 };
@@ -319,11 +320,9 @@ const buildHeaders = (targetUrl: string) => {
     "Content-Type": "application/json",
   };
   
-  // ONLY send OpenRouter key if target is actually openrouter.ai
-  if (targetUrl.includes("openrouter.ai")) {
-    if (ENV.openRouterApiKey) {
-      headers["Authorization"] = `Bearer ${ENV.openRouterApiKey.trim()}`;
-    }
+  const key = (ENV.openRouterApiKey || process.env.OPENROUTER_API_KEY || "").trim();
+  if (targetUrl.includes("openrouter.ai") && key) {
+    headers["Authorization"] = `Bearer ${key}`;
     headers["Referer"] = "https://bible-study-pro.com";
     headers["X-Title"] = "Bible Study Pro";
   } else if (targetUrl.includes("localhost:8888") || targetUrl.includes("127.0.0.1:8888") || targetUrl.includes(":8888")) {
@@ -379,8 +378,6 @@ const normalizeResponseFormat = ({
 };
 
 export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
-  await assertApiKey(params.agentOverride);
-
   const {
     messages,
     tools,
@@ -394,13 +391,15 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
     agentOverride,
   } = params;
 
-  const targetUrl = await resolveApiUrl(agentOverride);
-
+  let targetUrl = await resolveApiUrl(agentOverride);
   let targetModel = model;
-  if (!targetModel) {
+
+  if (targetUrl.includes("openrouter.ai")) {
+    targetModel = targetModel && !targetModel.includes(":") ? targetModel : (ENV.llmModel || "google/gemini-2.5-flash");
+  } else if (!targetModel) {
     const activeAgent = agentOverride || "local";
     if (activeAgent === "local") {
-      targetModel = ENV.localLlmModel || "meta-llama/llama-3.1-8b-instruct";
+      targetModel = ENV.localLlmModel || "qwen2.5-coder:32b";
     } else if (activeAgent === "vps") {
       targetModel = ENV.vpsLlmModel || "meta-llama/llama-3.1-8b-instruct";
     } else {
@@ -408,7 +407,7 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
     }
   }
 
-  // If local, automatically discover and use the available model (e.g. what is running in Ollama/LM Studio)
+  // If local, automatically discover and use the available model
   if (targetUrl.includes("localhost") || targetUrl.includes("127.0.0.1")) {
     targetModel = await resolveLocalModel(targetUrl, targetModel);
   }
@@ -451,6 +450,21 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
     });
 
     if (!response.ok) {
+      // If local failed, fallback to OpenRouter cloud
+      if (!targetUrl.includes("openrouter.ai") && (ENV.openRouterApiKey || process.env.OPENROUTER_API_KEY)) {
+        console.warn(`[AI Failover] Target ${targetUrl} failed with status ${response.status}. Retrying with OpenRouter cloud...`);
+        const cloudUrl = "https://openrouter.ai/api/v1/chat/completions";
+        payload.model = ENV.llmModel || "google/gemini-2.5-flash";
+        const fallbackRes = await fetch(cloudUrl, {
+          method: "POST",
+          headers: buildHeaders(cloudUrl),
+          body: JSON.stringify(payload),
+        });
+        if (fallbackRes.ok) {
+          return (await fallbackRes.json()) as InvokeResult;
+        }
+      }
+
       const errorText = await response.text();
       throw new LLMError(
         `LLM invoke failed: ${response.status} ${response.statusText}`,
@@ -461,17 +475,29 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
 
     return (await response.json()) as InvokeResult;
   } catch (err: any) {
-    if (err.code === "ECONNREFUSED" || err.message?.includes("fetch failed")) {
-      const serverType = targetUrl.includes("11434") ? "Ollama" : targetUrl.includes("1234") ? "LM Studio" : "OpenClaw/Llama.cpp";
-      throw new Error(`Local AI Server offline. Please start ${serverType} on your Mac. If you are using Ollama, run 'ollama run llama3.1' in your terminal.`);
+    // If connection refused, failover to OpenRouter cloud
+    if (!targetUrl.includes("openrouter.ai") && (ENV.openRouterApiKey || process.env.OPENROUTER_API_KEY)) {
+      console.warn(`[AI Failover] Connection to ${targetUrl} failed (${err.message}). Retrying with OpenRouter cloud...`);
+      const cloudUrl = "https://openrouter.ai/api/v1/chat/completions";
+      payload.model = ENV.llmModel || "google/gemini-2.5-flash";
+      try {
+        const fallbackRes = await fetch(cloudUrl, {
+          method: "POST",
+          headers: buildHeaders(cloudUrl),
+          body: JSON.stringify(payload),
+        });
+        if (fallbackRes.ok) {
+          return (await fallbackRes.json()) as InvokeResult;
+        }
+      } catch (cloudErr) {
+        console.error("[AI Failover] Cloud fallback also failed:", cloudErr);
+      }
     }
     throw err;
   }
 }
 
 export async function* invokeLLMStream(params: InvokeParams): AsyncGenerator<string, void, unknown> {
-  await assertApiKey(params.agentOverride);
-
   const {
     messages,
     tools,
@@ -481,13 +507,15 @@ export async function* invokeLLMStream(params: InvokeParams): AsyncGenerator<str
     agentOverride,
   } = params;
 
-  const targetUrl = await resolveStreamApiUrl(agentOverride);
-
+  let targetUrl = await resolveStreamApiUrl(agentOverride);
   let targetModel = model;
-  if (!targetModel) {
+
+  if (targetUrl.includes("openrouter.ai")) {
+    targetModel = targetModel && !targetModel.includes(":") ? targetModel : (ENV.llmModel || "google/gemini-2.5-flash");
+  } else if (!targetModel) {
     const activeAgent = agentOverride || "local";
     if (activeAgent === "local") {
-      targetModel = ENV.localLlmModel || "meta-llama/llama-3.1-8b-instruct";
+      targetModel = ENV.localLlmModel || "qwen2.5-coder:32b";
     } else if (activeAgent === "vps") {
       targetModel = ENV.vpsLlmModel || "meta-llama/llama-3.1-8b-instruct";
     } else {
@@ -495,7 +523,7 @@ export async function* invokeLLMStream(params: InvokeParams): AsyncGenerator<str
     }
   }
 
-  // If local, automatically discover and use the available model (e.g. what is running in Ollama/LM Studio)
+  // If local, automatically discover and use the available model
   if (targetUrl.includes("localhost") || targetUrl.includes("127.0.0.1")) {
     targetModel = await resolveLocalModel(targetUrl, targetModel);
   }
@@ -527,12 +555,32 @@ export async function* invokeLLMStream(params: InvokeParams): AsyncGenerator<str
       headers: buildHeaders(targetUrl),
       body: JSON.stringify(payload),
     });
-  } catch (err: any) {
-    if (err.code === "ECONNREFUSED" || err.message?.includes("fetch failed")) {
-      const serverType = targetUrl.includes("11434") ? "Ollama" : targetUrl.includes("1234") ? "LM Studio" : "OpenClaw/Llama.cpp";
-      throw new Error(`Local AI Server offline. Please start ${serverType} on your Mac. If you are using Ollama, run 'ollama run llama3.1' in your terminal.`);
+
+    if (!response.ok) {
+      if (!targetUrl.includes("openrouter.ai") && (ENV.openRouterApiKey || process.env.OPENROUTER_API_KEY)) {
+        console.warn(`[AI Stream Failover] Local target ${targetUrl} returned ${response.status}. Retrying with OpenRouter cloud...`);
+        const cloudUrl = "https://openrouter.ai/api/v1/chat/completions";
+        payload.model = ENV.llmModel || "google/gemini-2.5-flash";
+        response = await fetch(cloudUrl, {
+          method: "POST",
+          headers: buildHeaders(cloudUrl),
+          body: JSON.stringify(payload),
+        });
+      }
     }
-    throw err;
+  } catch (err: any) {
+    if (!targetUrl.includes("openrouter.ai") && (ENV.openRouterApiKey || process.env.OPENROUTER_API_KEY)) {
+      console.warn(`[AI Stream Failover] Connection to ${targetUrl} failed (${err.message}). Retrying with OpenRouter cloud...`);
+      const cloudUrl = "https://openrouter.ai/api/v1/chat/completions";
+      payload.model = ENV.llmModel || "google/gemini-2.5-flash";
+      response = await fetch(cloudUrl, {
+        method: "POST",
+        headers: buildHeaders(cloudUrl),
+        body: JSON.stringify(payload),
+      });
+    } else {
+      throw err;
+    }
   }
 
   if (!response.ok) {

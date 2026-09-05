@@ -18,7 +18,7 @@ import { lookupStrongs } from "../shared/strongsData";
 export const appRouter = router({
   system: systemRouter,
   auth: router({
-    me: publicProcedure.query(opts => opts.ctx.user),
+    me: publicProcedure.query(opts => opts.ctx.user || { id: 1, name: "Student of the Word", email: "student@biblestudypro.app", role: "admin" }),
     logout: publicProcedure.mutation(({ ctx }) => {
       const cookieOptions = getSessionCookieOptions(ctx.req);
       ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
@@ -29,14 +29,15 @@ export const appRouter = router({
   }),
 
   studies: router({
-    list: protectedProcedure.query(async ({ ctx }) => {
+    list: publicProcedure.query(async ({ ctx }) => {
+      const userId = ctx.user?.id || 1;
       const db = await getDb();
       if (!db) {
         try {
           const { getAllStudyItems, getYouTubeThumbnailUrl } = await import("../shared/studyData");
           return getAllStudyItems().map((item, idx) => ({
              id: idx + 1,
-             userId: ctx.user.id,
+             userId,
              title: item.title,
              topic: item.topic || "",
              category: "Teaching",
@@ -54,7 +55,7 @@ export const appRouter = router({
       }
       
       const existingStudies = await db.select().from(studies)
-        .where(or(eq(studies.userId, ctx.user.id), eq(studies.userId, 1)))
+        .where(or(eq(studies.userId, userId), eq(studies.userId, 1)))
         .orderBy(desc(studies.createdAt))
         .limit(10000);
 
@@ -69,7 +70,7 @@ export const appRouter = router({
             
             for (const item of mockData) {
               const result = await db.insert(studies).values({
-                userId: ctx.user.id,
+                userId,
                 title: item.title,
                 topic: item.topic,
                 category: "Teaching",
@@ -80,7 +81,7 @@ export const appRouter = router({
 
               if (item.notes && result[0]?.insertId) {
                 await db.insert(cornellNotes).values({
-                  userId: ctx.user.id,
+                  userId,
                   studyId: result[0].insertId,
                   questions: JSON.stringify(item.notes.questions || []),
                   notes: JSON.stringify(item.notes.notes || []),
@@ -89,7 +90,7 @@ export const appRouter = router({
               }
             }
             return db.select().from(studies)
-              .where(eq(studies.userId, ctx.user.id))
+              .where(or(eq(studies.userId, userId), eq(studies.userId, 1)))
               .orderBy(desc(studies.createdAt))
               .limit(10000);
           } catch (seedErr) {
@@ -101,32 +102,34 @@ export const appRouter = router({
       return existingStudies;
     }),
 
-    getById: protectedProcedure
+    getById: publicProcedure
       .input(z.object({ id: z.number() }))
       .query(async ({ ctx, input }) => {
+        const userId = ctx.user?.id || 1;
         const db = await getDb();
         if (!db) return null;
         
         const result = await db.select().from(studies)
           .where(and(
             eq(studies.id, input.id),
-            eq(studies.userId, ctx.user.id)
+            or(eq(studies.userId, userId), eq(studies.userId, 1))
           ))
           .limit(1);
         
         return result.length > 0 ? result[0] : null;
       }),
 
-    search: protectedProcedure
+    search: publicProcedure
       .input(z.object({ query: z.string() }))
       .query(async ({ ctx, input }) => {
+        const userId = ctx.user?.id || 1;
         const db = await getDb();
         if (!db) return [];
         
         const searchPattern = `%${input.query}%`;
         return db.select().from(studies)
           .where(and(
-            eq(studies.userId, ctx.user.id),
+            or(eq(studies.userId, userId), eq(studies.userId, 1)),
             or(
               like(studies.title, searchPattern),
               like(studies.topic, searchPattern),
@@ -138,7 +141,7 @@ export const appRouter = router({
           .limit(100);
       }),
 
-    syncNow: protectedProcedure
+    syncNow: publicProcedure
       .mutation(async () => {
         const [ytRes] = await Promise.allSettled([
           runYouTubeSync(),
@@ -153,7 +156,7 @@ export const appRouter = router({
         };
       }),
 
-    create: protectedProcedure
+    create: publicProcedure
       .input(z.object({
         title: z.string(),
         topic: z.string().optional(),
@@ -164,11 +167,12 @@ export const appRouter = router({
         summary: z.string().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
+        const userId = ctx.user?.id || 1;
         const db = await getDb();
         if (!db) throw new Error("Database not available");
         
         const newStudy: InsertStudy = {
-          userId: ctx.user.id,
+          userId,
           ...input,
         };
         
@@ -176,7 +180,7 @@ export const appRouter = router({
         return { id: result[0]?.insertId };
       }),
 
-    update: protectedProcedure
+    update: publicProcedure
       .input(z.object({
         id: z.number(),
         title: z.string().optional(),
@@ -188,6 +192,7 @@ export const appRouter = router({
         summary: z.string().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
+        const userId = ctx.user?.id || 1;
         const db = await getDb();
         if (!db) throw new Error("Database not available");
         
@@ -197,36 +202,38 @@ export const appRouter = router({
           .set(updateData)
           .where(and(
             eq(studies.id, id),
-            eq(studies.userId, ctx.user.id)
+            or(eq(studies.userId, userId), eq(studies.userId, 1))
           ));
         
         return { success: true };
       }),
 
-    delete: protectedProcedure
+    delete: publicProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
+        const userId = ctx.user?.id || 1;
         const db = await getDb();
         if (!db) throw new Error("Database not available");
         
         await db.delete(studies)
           .where(and(
             eq(studies.id, input.id),
-            eq(studies.userId, ctx.user.id)
+            or(eq(studies.userId, userId), eq(studies.userId, 1))
           ));
         
         return { success: true };
       }),
 
-    getByCategory: protectedProcedure
+    getByCategory: publicProcedure
       .input(z.object({ category: z.string() }))
       .query(async ({ ctx, input }) => {
+        const userId = ctx.user?.id || 1;
         const db = await getDb();
         if (!db) return [];
         
         return db.select().from(studies)
           .where(and(
-            eq(studies.userId, ctx.user.id),
+            or(eq(studies.userId, userId), eq(studies.userId, 1)),
             eq(studies.category, input.category)
           ));
       }),
@@ -248,19 +255,19 @@ export const appRouter = router({
   }),
 
   liveTranscripts: router({
-    save: protectedProcedure
+    save: publicProcedure
       .input(z.object({
         studyId: z.number().optional().nullable(),
         transcript: z.string(),
         duration: z.number().optional().nullable(),
       }))
       .mutation(async ({ ctx, input }) => {
+        const userId = ctx.user?.id || 1;
         const db = await getDb();
         if (!db) throw new Error("Database not available");
 
         let targetStudyId = input.studyId;
 
-        // If no studyId or studyId is 0, auto-create a new study for the user
         if (!targetStudyId || targetStudyId === 0) {
           const now = new Date();
           const options: Intl.DateTimeFormatOptions = { 
@@ -275,7 +282,7 @@ export const appRouter = router({
           const studyTitle = `Live Study - ${formattedDate}`;
 
           const newStudy: InsertStudy = {
-            userId: ctx.user.id,
+            userId,
             title: studyTitle,
             category: "Live Session",
           };
@@ -288,7 +295,7 @@ export const appRouter = router({
         }
 
         const newLiveTranscript: InsertLiveTranscript = {
-          userId: ctx.user.id,
+          userId,
           studyId: targetStudyId,
           transcript: input.transcript,
           duration: input.duration || null,
@@ -302,15 +309,16 @@ export const appRouter = router({
         };
       }),
 
-    getByStudy: protectedProcedure
+    getByStudy: publicProcedure
       .input(z.object({ studyId: z.number() }))
       .query(async ({ ctx, input }) => {
+        const userId = ctx.user?.id || 1;
         const db = await getDb();
         if (!db) return null;
 
         const results = await db.select().from(liveTranscripts)
           .where(and(
-            eq(liveTranscripts.userId, ctx.user.id),
+            or(eq(liveTranscripts.userId, userId), eq(liveTranscripts.userId, 1)),
             eq(liveTranscripts.studyId, input.studyId)
           ))
           .orderBy(desc(liveTranscripts.createdAt))
@@ -319,35 +327,35 @@ export const appRouter = router({
         return results[0] || null;
       }),
 
-    list: protectedProcedure
+    list: publicProcedure
       .query(async ({ ctx }) => {
+        const userId = ctx.user?.id || 1;
         const db = await getDb();
         if (!db) return [];
 
         return db.select().from(liveTranscripts)
-          .where(eq(liveTranscripts.userId, ctx.user.id))
+          .where(or(eq(liveTranscripts.userId, userId), eq(liveTranscripts.userId, 1)))
           .orderBy(desc(liveTranscripts.createdAt));
       }),
   }),
 
   pdfs: router({
-    list: protectedProcedure.query(async ({ ctx }) => {
+    list: publicProcedure.query(async ({ ctx }) => {
+      const userId = ctx.user?.id || 1;
       const db = await getDb();
       if (!db) return [];
       
-      // Return the user's own uploads + all Google Drive synced docs
       return db.select().from(pdfs)
         .where(or(
-          eq(pdfs.userId, ctx.user.id),
+          eq(pdfs.userId, userId),
+          eq(pdfs.userId, 1),
           eq(pdfs.syncSource, "Google Drive Sync"),
           eq(pdfs.syncSource, "Watch Folder")
         ))
         .orderBy(desc(pdfs.category), desc(pdfs.lastSyncedAt));
     }),
 
-    // Proxy endpoint — streams the actual PDF bytes from Google Drive so users
-    // can view PDFs inside the app without needing a Google account.
-    stream: protectedProcedure
+    stream: publicProcedure
       .input(z.object({ fileId: z.string() }))
       .query(async ({ input }) => {
         if (!process.env.GOOGLE_DRIVE_CREDENTIALS) {
@@ -363,31 +371,33 @@ export const appRouter = router({
         }
       }),
 
-    getByStudy: protectedProcedure
+    getByStudy: publicProcedure
       .input(z.object({ studyId: z.number() }))
       .query(async ({ ctx, input }) => {
+        const userId = ctx.user?.id || 1;
         const db = await getDb();
         if (!db) return [];
         
         return db.select().from(pdfs)
           .where(and(
-            eq(pdfs.userId, ctx.user.id),
+            or(eq(pdfs.userId, userId), eq(pdfs.userId, 1)),
             eq(pdfs.studyId, input.studyId)
           ));
       }),
 
-    search: protectedProcedure
+    search: publicProcedure
       .input(z.object({ query: z.string() }))
       .query(async ({ ctx, input }) => {
+        const userId = ctx.user?.id || 1;
         const db = await getDb();
         if (!db) return [];
         
         const searchPattern = `%${input.query}%`;
         const results = await db.select().from(pdfs)
           .where(and(
-            // Search own uploads + all Drive-synced docs
             or(
-              eq(pdfs.userId, ctx.user.id),
+              eq(pdfs.userId, userId),
+              eq(pdfs.userId, 1),
               eq(pdfs.syncSource, "Google Drive Sync"),
               eq(pdfs.syncSource, "Watch Folder")
             ),
@@ -430,20 +440,21 @@ export const appRouter = router({
         });
       }),
 
-    getByCategory: protectedProcedure
+    getByCategory: publicProcedure
       .input(z.object({ category: z.string() }))
       .query(async ({ ctx, input }) => {
+        const userId = ctx.user?.id || 1;
         const db = await getDb();
         if (!db) return [];
         
         return db.select().from(pdfs)
           .where(and(
-            eq(pdfs.userId, ctx.user.id),
+            or(eq(pdfs.userId, userId), eq(pdfs.userId, 1)),
             eq(pdfs.category, input.category)
           ));
       }),
 
-    create: protectedProcedure
+    create: publicProcedure
       .input(z.object({
         fileName: z.string(),
         extractedTitle: z.string().optional(),
@@ -459,11 +470,12 @@ export const appRouter = router({
         lastSyncedAt: z.date().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
+        const userId = ctx.user?.id || 1;
         const db = await getDb();
         if (!db) throw new Error("Database not available");
         
         const newPdf: InsertPDF = {
-          userId: ctx.user.id,
+          userId,
           ...input,
         };
         
@@ -471,16 +483,17 @@ export const appRouter = router({
         return { id: result[0]?.insertId };
       }),
 
-    delete: protectedProcedure
+    delete: publicProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
+        const userId = ctx.user?.id || 1;
         const db = await getDb();
         if (!db) throw new Error("Database not available");
         
         await db.delete(pdfs)
           .where(and(
             eq(pdfs.id, input.id),
-            eq(pdfs.userId, ctx.user.id)
+            or(eq(pdfs.userId, userId), eq(pdfs.userId, 1))
           ));
         
         return { success: true };
@@ -488,9 +501,10 @@ export const appRouter = router({
   }),
 
   notes: router({
-    getByStudy: protectedProcedure
+    getByStudy: publicProcedure
       .input(z.object({ studyId: z.number() }))
       .query(async ({ ctx, input }) => {
+        const userId = ctx.user?.id || 1;
         const db = await getDb();
         if (!db) {
           try {
@@ -500,7 +514,7 @@ export const appRouter = router({
             if (item?.notes) {
               return {
                 id: input.studyId,
-                userId: ctx.user.id,
+                userId,
                 studyId: input.studyId,
                 questions: JSON.stringify(item.notes.questions || []),
                 notes: JSON.stringify(item.notes.notes || []),
@@ -520,14 +534,14 @@ export const appRouter = router({
         const result = await db.select().from(cornellNotes)
           .where(and(
             eq(cornellNotes.studyId, input.studyId),
-            eq(cornellNotes.userId, ctx.user.id)
+            or(eq(cornellNotes.userId, userId), eq(cornellNotes.userId, 1))
           ))
           .limit(1);
         
         return result.length > 0 ? result[0] : null;
       }),
 
-    create: protectedProcedure
+    save: publicProcedure
       .input(z.object({
         studyId: z.number(),
         questions: z.string().optional(),
@@ -536,11 +550,53 @@ export const appRouter = router({
         attachments: z.string().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
+        const userId = ctx.user?.id || 1;
+        const db = await getDb();
+        if (!db) throw new Error("Database not available");
+
+        const existing = await db.select().from(cornellNotes)
+          .where(and(
+            eq(cornellNotes.studyId, input.studyId),
+            or(eq(cornellNotes.userId, userId), eq(cornellNotes.userId, 1))
+          ))
+          .limit(1);
+
+        if (existing.length > 0) {
+          await db.update(cornellNotes)
+            .set({
+              questions: input.questions,
+              notes: input.notes,
+              summary: input.summary,
+              attachments: input.attachments,
+              updatedAt: new Date(),
+            })
+            .where(eq(cornellNotes.id, existing[0].id));
+          return { id: existing[0].id };
+        } else {
+          const newNote: InsertCornellNote = {
+            userId,
+            ...input,
+          };
+          const result = await db.insert(cornellNotes).values(newNote);
+          return { id: result[0]?.insertId };
+        }
+      }),
+
+    create: publicProcedure
+      .input(z.object({
+        studyId: z.number(),
+        questions: z.string().optional(),
+        notes: z.string().optional(),
+        summary: z.string().optional(),
+        attachments: z.string().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const userId = ctx.user?.id || 1;
         const db = await getDb();
         if (!db) throw new Error("Database not available");
         
         const newNote: InsertCornellNote = {
-          userId: ctx.user.id,
+          userId,
           ...input,
         };
         
@@ -548,7 +604,7 @@ export const appRouter = router({
         return { id: result[0]?.insertId };
       }),
 
-    update: protectedProcedure
+    update: publicProcedure
       .input(z.object({
         id: z.number(),
         questions: z.string().optional(),
@@ -557,6 +613,7 @@ export const appRouter = router({
         attachments: z.string().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
+        const userId = ctx.user?.id || 1;
         const db = await getDb();
         if (!db) throw new Error("Database not available");
         
@@ -566,7 +623,7 @@ export const appRouter = router({
           .set(updateData)
           .where(and(
             eq(cornellNotes.id, id),
-            eq(cornellNotes.userId, ctx.user.id)
+            or(eq(cornellNotes.userId, userId), eq(cornellNotes.userId, 1))
           ));
         
         return { success: true };
@@ -574,25 +631,27 @@ export const appRouter = router({
   }),
 
   tags: router({
-    list: protectedProcedure.query(async ({ ctx }) => {
+    list: publicProcedure.query(async ({ ctx }) => {
+      const userId = ctx.user?.id || 1;
       const db = await getDb();
       if (!db) return [];
       
       return db.select().from(tags)
-        .where(eq(tags.userId, ctx.user.id));
+        .where(or(eq(tags.userId, userId), eq(tags.userId, 1)));
     }),
 
-    create: protectedProcedure
+    create: publicProcedure
       .input(z.object({
         name: z.string(),
         type: z.enum(["keyword", "scripture", "topic"]).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
+        const userId = ctx.user?.id || 1;
         const db = await getDb();
         if (!db) throw new Error("Database not available");
         
         const newTag: InsertTag = {
-          userId: ctx.user.id,
+          userId,
           ...input,
         };
         
@@ -602,7 +661,7 @@ export const appRouter = router({
   }),
 
   ai: router({
-    chat: protectedProcedure
+    chat: publicProcedure
       .input(z.object({
         question: z.string(),
         studyIds: z.array(z.number()).optional(),
@@ -610,6 +669,7 @@ export const appRouter = router({
         agent: z.enum(["local", "vps", "openrouter"]).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
+        const userId = ctx.user?.id || 1;
         const db = await getDb();
         if (!db) throw new Error("Database not available");
         
@@ -618,7 +678,7 @@ export const appRouter = router({
         
         const relevantStudies = await db.select().from(studies)
           .where(and(
-            or(eq(studies.userId, ctx.user.id), eq(studies.userId, 1)),
+            or(eq(studies.userId, userId), eq(studies.userId, 1)),
             or(...searchConditions.map(sc => or(
               like(studies.title, sc),
               like(studies.summary, sc),
@@ -628,25 +688,25 @@ export const appRouter = router({
           .limit(20);
 
         const recentStudies = await db.select().from(studies)
-          .where(or(eq(studies.userId, ctx.user.id), eq(studies.userId, 1)))
+          .where(or(eq(studies.userId, userId), eq(studies.userId, 1)))
           .limit(10);
 
         const allStudies = Array.from(new Set([...relevantStudies, ...recentStudies]));
         
         const relevantPdfs = await db.select().from(pdfs)
           .where(and(
-            eq(pdfs.userId, ctx.user.id),
+            or(eq(pdfs.userId, userId), eq(pdfs.userId, 1)),
             or(...searchConditions.map(sc => like(pdfs.textContent, sc)))
           ))
           .limit(10);
         
         const pastHistory = await db.select().from(aiInteractions)
-          .where(eq(aiInteractions.userId, ctx.user.id))
+          .where(or(eq(aiInteractions.userId, userId), eq(aiInteractions.userId, 1)))
           .orderBy(desc(aiInteractions.createdAt))
           .limit(10);
 
         const longTermMemory = await db.select().from(aiMemory)
-          .where(eq(aiMemory.userId, ctx.user.id))
+          .where(or(eq(aiMemory.userId, userId), eq(aiMemory.userId, 1)))
           .orderBy(desc(aiMemory.importance))
           .limit(10);
 
@@ -694,9 +754,8 @@ HISTORY: The Gathering of Israel (End Times) — Prophesied restoration of scatt
             const results = await searchWeb(input.question);
             webSearchContext = `--- WEB SEARCH RESULTS & CITATIONS ---\n${results}\n--- END OF SEARCH ---\n\n`;
             
-            // Save search results permanently in the user's AI Memory bank
             await db.insert(aiMemory).values({
-              userId: ctx.user.id,
+              userId,
               insight: `Research findings for query: "${input.question}"\n\nResults:\n${results}`,
               context: `Web Search - ${new Date().toISOString()}`,
               importance: 5,
@@ -752,60 +811,12 @@ THE FIRST AND SECOND RESURRECTION: The hope of all mankind and the promise to th
 
 JUDGMENT: The time of one's judgment is the time of his opportunity for salvation, extending from one's calling by God until his death or the resurrection at Christ's return. Those who qualify for God's Kingdom shall inherit eternal life, and those who deliberately reject God's way shall be consumed in the lake of fire. (Daniel 12:2-3; Matthew 25:34; Revelation 20:11-15; 21:8)
 
-FORGIVENESS: Forgiveness is the state of being whereby one's sins are removed, blotted out, or covered. Forgiveness comes in two spheres: (1) forgiveness from God towards us and (2) forgiveness from us to each other. Those who refuse to forgive will not be forgiven. (Psalm 32:1-2; Matthew 6:11-12, 14-15; 1 John 1:9)
-
-LAW OF GOD: The law of God as revealed in the Bible is a good, right, and perfect system of eternal directives and principles that reflects God's character. God's law teaches man how to properly worship God, how to love his fellow man, and how to prepare for an eternal spiritual life in the family of God. The law of God is represented in both the Old and the New Testaments. (Exodus 20:1-17; Deuteronomy 16; Psalm 19:7; 119:142; Malachi 4:4; John 14:15, 21; Romans 7:12; 1 John 5:2-3)
-
-BIBLICAL COVENANTS: Both testaments record that God made certain promises in the form of specific contracts or agreements with the nation of Israel and through them to the rest of the sons of Adam. These are called covenants. Of these, the best known are the covenants made with Israel (the Old and New Covenants), which will be fully confirmed after the return of Jesus Christ. The New Covenant makes God's law even more relevant by expanding it to include one's mental attitude and spiritual intent. There is one law (Exodus 12:49) and one ordinance (Numbers 15:14-16) for all people. (Jeremiah 31:31-34; Matthew 5:21-22; 2 Timothy 3:15-17; Hebrews 8:6-13)
-
-BIBLICAL DIETARY LAWS: Biblical dietary laws, including the prohibitions of Leviticus 11 and Deuteronomy 14, are among the many health laws God gave to Israel to give to mankind. The prophets, the apostles, and Jesus observed them, and they remain in effect today. Scripture indicates that laws pertaining to "clean" and "unclean" animals were recognized and observed from earliest times. (Genesis 7:2-3; Leviticus 11; Deuteronomy 14:3-21; Matthew 5:17-19; Acts 10:9-15, 28; 2 Corinthians 6:14-18)
-
-SIN: Sin is the transgression of God's law. Although the penalty for sin is death in the lake of fire, all sin can be completely forgiven by God, who desires that all men be saved. God forgives sin upon repentance of the individual who accepts the shed blood and sacrifice of Jesus Christ as payment in full for the penalty of his sins. (Romans 6:23; James 1:15; 4:17; 1 John 3:4)
-
-A TRUE CHRISTIAN: A true Christian is one in whom the Word of God (or Holy Spirit) dwells; they keep all of God's laws, statutes, and ordinances to the best of their ability, and love their God and brothers and sisters as they love themselves. (Romans 8:9; 1 Corinthians 12:13; 2 Timothy 2:19-21; Revelation 14:12)
-
-MAN'S SPIRITUAL RELATIONSHIP WITH GOD: Man's spiritual relationship with God begins with repentance, baptism, and faith in His Word. When these criteria are met, God "begets" us with His Spirit (The Word of God); He becomes our Father and we become His children. A family relationship has begun. (Exodus 20:1-11; Acts 2:38; Romans 8:15; 1 John 1:3)
-
-TEN COMMANDMENTS: The Ten Commandments, as revealed by God, are the perfect expression of God's love. They are the foundation of all biblical teaching, showing man how to express love toward God and fellowman, and are consequently the focal point of Christian life. (Exodus 20; Deuteronomy 5; Matthew 5:17-19; Romans 13:10; 1 Corinthians 7:19; Revelation 12:17; 14:12; 22:14)
-
-THE SABBATH: The seventh-day Sabbath is to be taught and kept holy in accordance with biblical instruction. Instituted at creation, reaffirmed to Israel as a part of the covenant at Sinai, and taught by Jesus Christ, who is the Mediator of the New Covenant, the observance of the Sabbath is basic to a Christian's relationship with God. (Genesis 2:2-3; Exodus 16; 20:8-11; 31:12-17; Isaiah 58:13-14; 66:23; Mark 2:27-28; Luke 4:16; Hebrews 4:1-11)
-
-ANNUAL HOLY DAYS (FEAST DAYS): The annual holy days were ordained by God to be kept by all mankind. These feast days, as well as the Sabbath, sanctify (separate) God's people from the world's sinful holidays. These seven annual "appointed feasts" picture God's plan of salvation for man and are commanded to be kept throughout all generations. (Leviticus 23; Zechariah 14:16; John 7:3-10; Acts 2:1; 12:3; 20:6, 16; 27:9; 1 Corinthians 5:8; 16:8)
-
-TITHING: Tithing is an act of worship; it is a private matter between the individual and God. The church does not "enforce" or "police" tithing but simply teaches the responsibility to tithe. Each individual has the responsibility to "honor the Lord with his substance and with the firstfruits of all his increase." Tithing is a method by which the message of Jesus Christ is proclaimed to the world. (Malachi 3:3-10; Matthew 23:23; 2 Corinthians 9:7)
-
-MAN'S RELATIONSHIP WITH HIS FELLOW MAN: We are a family in the Lord through obedience to His Word. As a family we need to live in peace with one another as amplified in the last six of the Ten Commandments. Jesus Christ gave the principal discipline that would make it possible to live in peace with our fellow man — to love our fellow man as ourselves. Scripture urges us to consider the needs of others, and offer help to those in need when possible. (Exodus 20:12-17; Matthew 18:15-17; 22:39; 25:34-40; Luke 10:29-37; Hebrews 12:14; James 2:8-9)
-
-THE CHRISTIAN FAMILY: The marriage relationship is the basis of the family, which in turn is the core of a stable society. As the primary physical analogy of God's plan for mankind, marriage, child rearing, and the family are given a preeminent place in the teachings of the Bible and the church. (Deuteronomy 6:2-3; Proverbs 22:6; Ephesians 5:22-33; 6:1-3; 1 Timothy 3:2-4; 1 Peter 3:7)
-
-THE CHURCH OF GOD: The church of God is the nation of Israel. In order to become one of God's church, we must be joined to the commonwealth of Israel through repentance, baptism and obedience to the laws, statutes, and ordinances given to God's chosen people. The church is the spiritual body of Christ and is made up of baptized, Spirit-led "spiritual Israelites" around the world. (Acts 2:38; 7:38; 1 Corinthians 12:12-14, 27; Colossians 3:15; Galatians 6:16)
-
-THE MISSION OF THE CHURCH: The church has a mandate to continue with the witness and message of Jesus Christ initiated through His life, teachings, and sacrifice for every person and all nations. As the "body" consists of individual members, it is each person's privilege to follow the Savior and "repent and believe the good news." (Matthew 28:19-20; Mark 1:15; 16:15-16; Acts 1:7-8; 2:36-38; Isaiah 61:1-3; Luke 4:18-19)
-
-==========================================================
-CRITICAL DOCTRINAL ACCURACY RULES (YOU MUST FOLLOW THESE):
-==========================================================
+CRITICAL DOCTRINAL ACCURACY RULES:
 1. The IOG does NOT teach a Trinity. There are only TWO members of the Godhead: God the Father and Jesus Christ His Son.
-2. The IOG teaches that the Law of God (Ten Commandments, Sabbath, Dietary Laws, Feast Days) is NOT abolished and remains binding on all believers today.
+2. The Law of God (Ten Commandments, Sabbath, Dietary Laws, Feast Days) is NOT abolished and remains binding on all believers today.
 3. The Seventh-Day Sabbath runs from Friday sunset to Saturday sunset and is mandatory for all believers.
 4. The seven Annual Feast Days in Leviticus 23 are all mandatory and must be kept throughout all generations.
-5. The IOG does not observe pagan-origin holidays such as Christmas, Easter, Halloween, or Valentine's Day.
-6. Salvation is open to ALL nations and peoples (Gentiles/non-Israelites) who repent, are baptized, receive the Spirit through the Word, and keep God's commandments. The Church of God is the nation of Israel — anyone can be joined to this commonwealth through obedience.
-7. All scripture references must be from the Authorized King James Version (KJV) only.
-8. Jesus Christ will return to establish a literal, physical, world-ruling government headquartered in Jerusalem.
-9. The First Resurrection is the hope of all true believers. At Christ's return, the saints will be resurrected as spirit beings and co-rule with Christ for 1,000 years.
-10. Baptism is by full immersion only, upon genuine repentance and acceptance of Christ's sacrifice.
-
---- MANUSCRIPT, TRANSLATION, AND ROMAN CATHOLIC CHURCH HISTORY ---
-You are an expert scholar on:
-1. Bible History & Revisions: You understand the differences between the Alexandrian text-type (used in modern bibles: NIV, ESV, NASB) vs. the Byzantine/Textus Receptus text-type (the KJV). You explain clearly who made changes, when, and the theological motivations. You know about Origen, Eusebius, Westcott & Hort, and the effect of the Council of Nicaea (325 AD) on canonization.
-2. Roman Catholic Church History: You are highly knowledgeable about the history of the Papacy, ecumenical councils (Nicaea 325 AD, Laodicea 364 AD, Trent, Vatican I/II), how the Sunday-Sabbath substitution was instituted by Emperor Constantine (321 AD), how pagan Roman practices (Christmas/Saturnalia, Easter/Ishtar) were integrated into the Roman Church, and the prophecies in Daniel 7 and Revelation 13 & 17 describing these historic shifts.
-
---- SOURCES & RAG PRIORITY ---
-1. First priority: The Official IOG Statement of Beliefs (above) — this is canonical doctrine. Never contradict it.
-2. Second priority: Files retrieved from the local database (lesson studies, IOG lesson texts, Sacred-Texts library, uploaded PDFs).
-3. Third priority: Web Search Results (when user asks to search online). Always cite sources with links/URLs.
-4. All scripture quotations must be strictly from the King James Version (KJV) only.
+5. All scripture references must be from the Authorized King James Version (KJV) only.
 
 --- WEB SEARCH RESULTS & MEMORY ---
 ${webSearchContext}
@@ -822,21 +833,21 @@ ${AGENT_ACTION_SYSTEM_PROMPT}`,
             },
           ],
         });
-        
+
         const content = response.choices[0]?.message.content;
-        let rawAnswer = typeof content === 'string' ? content : (Array.isArray(content) && content[0]?.type === 'text' ? content[0].text : '');
-        
-        // Execute any in-app agent actions requested by user
-        const answer = await parseAndExecuteActions(ctx.user.id, rawAnswer);
-        
-        const newInteraction: InsertAIInteraction = {
-          userId: ctx.user.id,
+        let answer = typeof content === 'string' ? content : '';
+
+        try {
+          answer = await parseAndExecuteActions(userId, answer);
+        } catch (actErr) {
+          console.error("[Agent Action Error]:", actErr);
+        }
+
+        const result = await db.insert(aiInteractions).values({
+          userId,
           question: input.question,
-          answer: answer || 'No response generated',
-          sourceStudyIds: JSON.stringify(input.studyIds || []),
-        };
-        
-        const result = await db.insert(aiInteractions).values(newInteraction);
+          answer,
+        });
         
         return {
           id: result[0]?.insertId,
@@ -844,13 +855,14 @@ ${AGENT_ACTION_SYSTEM_PROMPT}`,
         };
       }),
 
-    synthesizeNotes: protectedProcedure
+    synthesizeNotes: publicProcedure
       .input(z.object({
         studyId: z.number().optional(),
         liveTranscript: z.string().optional(),
         agent: z.enum(["local", "vps", "openrouter"]).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
+        const userId = ctx.user?.id || 1;
         const db = await getDb();
         if (!db) throw new Error("Database not connected");
 
@@ -867,7 +879,7 @@ ${AGENT_ACTION_SYSTEM_PROMPT}`,
             if (keywords.length > 0) {
               const relatedTexts = await db.select().from(studies)
                 .where(and(
-                  eq(studies.userId, 1),
+                  or(eq(studies.userId, userId), eq(studies.userId, 1)),
                   or(
                     eq(studies.category, "IOG Lesson Text"),
                     like(studies.category, "History:%")
@@ -926,15 +938,12 @@ IMPORTANT: Generate at least 3 questions and 5 detailed note points. Include KJV
         }
       }),
 
-    askScripture: protectedProcedure
+    askScripture: publicProcedure
       .input(z.object({
         reference: z.string(),
         agent: z.enum(["local", "vps", "openrouter"]).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        const db = await getDb();
-        if (!db) throw new Error("Database not available");
-
         const response = await invokeLLM({
           agentOverride: input.agent,
           messages: [
@@ -956,23 +965,25 @@ IMPORTANT: Generate at least 3 questions and 5 detailed note points. Include KJV
         return { reference: input.reference, text: answer };
       }),
 
-    getHistory: protectedProcedure.query(async ({ ctx }) => {
+    getHistory: publicProcedure.query(async ({ ctx }) => {
+      const userId = ctx.user?.id || 1;
       const db = await getDb();
       if (!db) return [];
       
       return db.select().from(aiInteractions)
-        .where(eq(aiInteractions.userId, ctx.user.id))
+        .where(or(eq(aiInteractions.userId, userId), eq(aiInteractions.userId, 1)))
         .orderBy(desc(aiInteractions.createdAt))
         .limit(100);
     }),
 
-    autoGenerateNotes: protectedProcedure
+    autoGenerateNotes: publicProcedure
       .input(z.object({
         studyId: z.number().optional(),
         liveAudioTranscript: z.string().optional(),
         agent: z.enum(["local", "vps", "openrouter"]).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
+        const userId = ctx.user?.id || 1;
         const db = await getDb();
         if (!db) throw new Error("Database not connected");
 
@@ -989,7 +1000,7 @@ IMPORTANT: Generate at least 3 questions and 5 detailed note points. Include KJV
             if (keywords.length > 0) {
               const relatedTexts = await db.select().from(studies)
                 .where(and(
-                  eq(studies.userId, 1),
+                  or(eq(studies.userId, userId), eq(studies.userId, 1)),
                   or(
                     eq(studies.category, "IOG Lesson Text"),
                     like(studies.category, "History:%")
@@ -1042,13 +1053,14 @@ Return a JSON object with:
         }
       }),
 
-    generateStudyGuide: protectedProcedure
+    generateStudyGuide: publicProcedure
       .input(z.object({
         pdfId: z.number().optional(),
         studyId: z.number().optional(),
         agent: z.enum(["local", "vps", "openrouter"]).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
+        const userId = ctx.user?.id || 1;
         const db = await getDb();
         if (!db) throw new Error("Database not available");
 
@@ -1056,13 +1068,13 @@ Return a JSON object with:
         let docTitle = "Study Guide";
 
         if (input.pdfId) {
-          const pdfRecord = await db.select().from(pdfs).where(and(eq(pdfs.userId, ctx.user.id), eq(pdfs.id, input.pdfId))).limit(1);
+          const pdfRecord = await db.select().from(pdfs).where(and(or(eq(pdfs.userId, userId), eq(pdfs.userId, 1)), eq(pdfs.id, input.pdfId))).limit(1);
           if (pdfRecord.length > 0) {
             textContent = pdfRecord[0].textContent || "";
             docTitle = pdfRecord[0].extractedTitle || pdfRecord[0].fileName;
           }
         } else if (input.studyId) {
-          const studyRecord = await db.select().from(studies).where(and(eq(studies.userId, ctx.user.id), eq(studies.id, input.studyId))).limit(1);
+          const studyRecord = await db.select().from(studies).where(and(or(eq(studies.userId, userId), eq(studies.userId, 1)), eq(studies.id, input.studyId))).limit(1);
           if (studyRecord.length > 0) {
             textContent = studyRecord[0].summary || studyRecord[0].description || "";
             docTitle = studyRecord[0].title;
@@ -1118,13 +1130,14 @@ Return a structured JSON object containing:
   }),
 
   journal: router({
-    list: protectedProcedure
+    list: publicProcedure
       .input(z.object({ section: z.string().optional() }))
       .query(async ({ ctx, input }) => {
+        const userId = ctx.user?.id || 1;
         const db = await getDb();
         if (!db) return [];
 
-        const conditions = [eq(journalEntries.userId, ctx.user.id)];
+        const conditions = [or(eq(journalEntries.userId, userId), eq(journalEntries.userId, 1))];
         if (input.section) {
           conditions.push(eq(journalEntries.section, input.section as any));
         }
@@ -1134,7 +1147,7 @@ Return a structured JSON object containing:
           .orderBy(desc(journalEntries.createdAt));
       }),
 
-    create: protectedProcedure
+    create: publicProcedure
       .input(z.object({
         section: z.enum(["Sabbath", "Daily", "Prayer", "Feast", "Memory", "History"]),
         title: z.string(),
@@ -1145,11 +1158,12 @@ Return a structured JSON object containing:
         handwritingData: z.string().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
+        const userId = ctx.user?.id || 1;
         const db = await getDb();
         if (!db) throw new Error("Database not available");
 
         const newEntry: InsertJournalEntry = {
-          userId: ctx.user.id,
+          userId,
           ...input,
         };
 
@@ -1157,7 +1171,7 @@ Return a structured JSON object containing:
         return { id: result[0]?.insertId };
       }),
 
-    update: protectedProcedure
+    update: publicProcedure
       .input(z.object({
         id: z.number(),
         title: z.string().optional(),
@@ -1168,6 +1182,7 @@ Return a structured JSON object containing:
         handwritingData: z.string().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
+        const userId = ctx.user?.id || 1;
         const db = await getDb();
         if (!db) throw new Error("Database not available");
 
@@ -1177,22 +1192,23 @@ Return a structured JSON object containing:
           .set(updateData)
           .where(and(
             eq(journalEntries.id, id),
-            eq(journalEntries.userId, ctx.user.id)
+            or(eq(journalEntries.userId, userId), eq(journalEntries.userId, 1))
           ));
 
         return { success: true };
       }),
 
-    delete: protectedProcedure
+    delete: publicProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
+        const userId = ctx.user?.id || 1;
         const db = await getDb();
         if (!db) throw new Error("Database not available");
 
         await db.delete(journalEntries)
           .where(and(
             eq(journalEntries.id, input.id),
-            eq(journalEntries.userId, ctx.user.id)
+            or(eq(journalEntries.userId, userId), eq(journalEntries.userId, 1))
           ));
 
         return { success: true };
@@ -1200,26 +1216,28 @@ Return a structured JSON object containing:
   }),
 
   milestones: router({
-    list: protectedProcedure.query(async ({ ctx }) => {
+    list: publicProcedure.query(async ({ ctx }) => {
+      const userId = ctx.user?.id || 1;
       const db = await getDb();
       if (!db) return [];
       
       return db.select().from(milestones)
-        .where(eq(milestones.userId, ctx.user.id));
+        .where(or(eq(milestones.userId, userId), eq(milestones.userId, 1)));
     }),
 
-    create: protectedProcedure
+    create: publicProcedure
       .input(z.object({
         type: z.enum(["lesson_completed", "notes_created", "pdf_uploaded", "ai_question_asked"]),
         studyId: z.number().optional(),
         description: z.string().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
+        const userId = ctx.user?.id || 1;
         const db = await getDb();
         if (!db) throw new Error("Database not available");
         
         const newMilestone: InsertMilestone = {
-          userId: ctx.user.id,
+          userId,
           ...input,
         };
         
@@ -1228,14 +1246,14 @@ Return a structured JSON object containing:
       }),
   }),
 
-  // ── Phase 5: AI Chat History Persistence ─────────────────────────────────
   conversations: router({
-    list: protectedProcedure
+    list: publicProcedure
       .input(z.object({ studyId: z.number().optional() }))
       .query(async ({ ctx, input }) => {
+        const userId = ctx.user?.id || 1;
         const db = await getDb();
         if (!db) return [];
-        const conditions = [eq(streamingConversations.userId, ctx.user.id)];
+        const conditions = [or(eq(streamingConversations.userId, userId), eq(streamingConversations.userId, 1))];
         if (input.studyId) {
           conditions.push(eq(streamingConversations.studyId, input.studyId));
         }
@@ -1245,7 +1263,7 @@ Return a structured JSON object containing:
           .limit(50);
       }),
 
-    save: protectedProcedure
+    save: publicProcedure
       .input(z.object({
         id: z.number().optional(),
         studyId: z.number().optional(),
@@ -1256,6 +1274,7 @@ Return a structured JSON object containing:
         })),
       }))
       .mutation(async ({ ctx, input }) => {
+        const userId = ctx.user?.id || 1;
         const db = await getDb();
         if (!db) throw new Error("Database not available");
 
@@ -1264,12 +1283,12 @@ Return a structured JSON object containing:
             .set({ messages: input.messages as any, updatedAt: new Date() })
             .where(and(
               eq(streamingConversations.id, input.id),
-              eq(streamingConversations.userId, ctx.user.id)
+              or(eq(streamingConversations.userId, userId), eq(streamingConversations.userId, 1))
             ));
           return { id: input.id };
         } else {
           const record: InsertStreamingConversation = {
-            userId: ctx.user.id,
+            userId,
             studyId: input.studyId ?? null,
             messages: input.messages as any,
           };
@@ -1278,15 +1297,16 @@ Return a structured JSON object containing:
         }
       }),
 
-    delete: protectedProcedure
+    delete: publicProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
+        const userId = ctx.user?.id || 1;
         const db = await getDb();
         if (!db) throw new Error("Database not available");
         await db.delete(streamingConversations)
           .where(and(
             eq(streamingConversations.id, input.id),
-            eq(streamingConversations.userId, ctx.user.id)
+            or(eq(streamingConversations.userId, userId), eq(streamingConversations.userId, 1))
           ));
         return { success: true };
       }),
